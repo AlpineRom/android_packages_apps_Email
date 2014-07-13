@@ -869,7 +869,9 @@ public class EmailProvider extends ContentProvider {
                                 flags = values.getAsInteger(Attachment.FLAGS);
                             }
                             // Report all new attachments to the download service
-                            if (TextUtils.isEmpty(values.getAsString(Attachment.LOCATION))) {
+                            final int dummyFlag = Attachment.FLAG_DUMMY_ATTACHMENT;
+                            if ((dummyFlag & flags) != dummyFlag && TextUtils.isEmpty(
+                                    values.getAsString(Attachment.LOCATION))) {
                                 LogUtils.w(TAG, new Throwable(), "attachment with blank location");
                             }
                             mAttachmentService.attachmentChanged(getContext(), longId, flags);
@@ -2264,6 +2266,7 @@ public class EmailProvider extends ContentProvider {
                 .add(UIProvider.ConversationColumns.ACCOUNT_URI,
                         uriWithColumn("uiaccount", MessageColumns.ACCOUNT_KEY))
                 .add(UIProvider.ConversationColumns.SENDER_INFO, MessageColumns.FROM_LIST)
+                .add(UIProvider.ConversationColumns.LOADED, MessageColumns.FLAG_LOADED)
                 .build();
         }
         return sMessageListMap;
@@ -2332,6 +2335,7 @@ public class EmailProvider extends ContentProvider {
                 .add(UIProvider.MessageColumns.SPAM_WARNING_LINK_TYPE,
                         Integer.toString(UIProvider.SpamWarningLinkType.NO_LINK))
                 .add(UIProvider.MessageColumns.VIA_DOMAIN, null)
+                .add(UIProvider.MessageColumns.LOADED, EmailContent.MessageColumns.FLAG_LOADED)
                 .build();
         }
         return sMessageViewMap;
@@ -3869,6 +3873,8 @@ public class EmailProvider extends ContentProvider {
 
             conversationInfo.firstSnippet = getString(getColumnIndex(ConversationColumns.SNIPPET));
 
+            final boolean isLoaded = getInt(getColumnIndex(ConversationColumns.LOADED)) ==
+                    EmailContent.Message.FLAG_LOADED_COMPLETE;
             final boolean isRead = getInt(getColumnIndex(ConversationColumns.READ)) != 0;
             final boolean isStarred = getInt(getColumnIndex(ConversationColumns.STARRED)) != 0;
             final String senderString = getString(getColumnIndex(MessageColumns.DISPLAY_NAME));
@@ -3889,7 +3895,7 @@ public class EmailProvider extends ContentProvider {
             }
 
             final MessageInfo messageInfo = new MessageInfo(isRead, isStarred, senderString,
-                    0 /* priority */, email);
+                    0 /* priority */, email, isLoaded);
             conversationInfo.addMessage(messageInfo);
 
             return conversationInfo;
@@ -4350,7 +4356,7 @@ public class EmailProvider extends ContentProvider {
                 c = db.rawQuery(genQueryConversation(uiProjection), new String[] {id});
                 break;
         }
-        if (notifyUri != null) {
+        if (c != null && notifyUri != null) {
             c.setNotificationUri(resolver, notifyUri);
         }
         return c;
@@ -4811,6 +4817,8 @@ public class EmailProvider extends ContentProvider {
             final Object val = values.get(columnName);
             if (columnName.equals(UIProvider.ConversationColumns.STARRED)) {
                 putIntegerLongOrBoolean(ourValues, MessageColumns.FLAG_FAVORITE, val);
+            } else if (columnName.equals(UIProvider.ConversationColumns.LOADED)) {
+                putIntegerLongOrBoolean(ourValues, MessageColumns.FLAG_LOADED, val);
             } else if (columnName.equals(UIProvider.ConversationColumns.READ)) {
                 putIntegerLongOrBoolean(ourValues, MessageColumns.FLAG_READ, val);
             } else if (columnName.equals(UIProvider.ConversationColumns.SEEN)) {

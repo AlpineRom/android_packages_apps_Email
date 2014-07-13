@@ -23,6 +23,8 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.TrafficStats;
 import android.net.Uri;
 import android.os.IBinder;
@@ -57,6 +59,9 @@ import com.android.mail.utils.LogUtils;
 
 import org.apache.james.mime4j.EOLConvertingInputStream;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -98,7 +103,31 @@ public class Pop3Service extends Service {
         public void loadAttachment(final IEmailServiceCallback callback, final long accountId,
                 final long attachmentId, final boolean background) throws RemoteException {
             Attachment att = Attachment.restoreAttachmentWithId(mContext, attachmentId);
-            if (att == null || att.mUiState != AttachmentState.DOWNLOADING) return;
+            if (att == null) return;
+            File attFile = AttachmentUtilities.getAttachmentFilename(mContext, accountId,
+                    attachmentId);
+            boolean requested = (att.mFlags & EmailContent.Attachment.FLAG_DOWNLOAD_USER_REQUEST) ==
+                    EmailContent.Attachment.FLAG_DOWNLOAD_USER_REQUEST;
+            if (requested && attFile.exists()) {
+                try {
+                    // Remove the download user request flag
+                    ContentValues values = new ContentValues();
+                    values.put(AttachmentColumns.FLAGS,
+                            att.mFlags &= ~Attachment.FLAG_DOWNLOAD_USER_REQUEST);
+                    att.update(mContext, values);
+
+                    // Save the attachment locally
+                    AttachmentUtilities.saveAttachment(mContext, new FileInputStream(attFile), att);
+
+                    // Notify to the callback that all was successfully
+                    callback.loadAttachmentStatus(att.mMessageKey, attachmentId,
+                            EmailServiceStatus.SUCCESS, 0);
+                    return;
+                } catch (FileNotFoundException e) {
+                    // Ignored. It was checked previously;
+                }
+            }
+            if (att.mUiState != AttachmentState.DOWNLOADING) return;
             long inboxId = Mailbox.findMailboxOfType(mContext, att.mAccountKey, Mailbox.TYPE_INBOX);
             if (inboxId == Mailbox.NO_MAILBOX) return;
             // We load attachments during a sync
@@ -194,8 +223,7 @@ public class Pop3Service extends Service {
             // They are in most recent to least recent order, process them that way.
             for (int i = 0; i < cnt; i++) {
                 final Pop3Message message = unsyncedMessages.get(i);
-                remoteFolder.fetchBody(message, Pop3Store.FETCH_BODY_SANE_SUGGESTED_SIZE / 76,
-                        null);
+                remoteFolder.fetchBody(message, getFetchBodySize(context, account), null);
                 int flag = EmailContent.Message.FLAG_LOADED_COMPLETE;
                 if (!message.isComplete()) {
                     // TODO: when the message is not complete, this should mark the message as
@@ -490,5 +518,19 @@ public class Pop3Service extends Service {
 
         // Clean up and report results
         remoteFolder.close(false);
+    }
+
+    private static int getFetchBodySize(Context context, Account account) {
+        ConnectivityManager cm = (ConnectivityManager) context.getSystemService(
+                Context.CONNECTIVITY_SERVICE);
+        NetworkInfo info = cm.getActiveNetworkInfo();
+        boolean wifi = info != null && info.getType() == ConnectivityManager.TYPE_WIFI;
+        if ((account.mAutoFetchAttachments == Account.AUTO_FETCH_ATTACHMENT_NEVER) ||
+                (account.mAutoFetchAttachments == Account.AUTO_FETCH_ATTACHMENT_WIFI && !wifi)) {
+            // Return pop3 sane suggested size
+            return Pop3Store.FETCH_BODY_SANE_SUGGESTED_SIZE / 76;
+        }
+        // Do a full body fetch
+        return -1;
     }
 }
